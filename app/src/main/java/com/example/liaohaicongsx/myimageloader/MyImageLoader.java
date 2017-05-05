@@ -20,30 +20,33 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Created by liaohaicongsx on 2017/05/04.
  */
-//自定义图片加载框架
 public class MyImageLoader {
 
     public static final String TAG = "MyImageLoader";
 
-    private LruCache<String, Bitmap> memoryCache;   //内存缓存
-    private DiskLruCache diskLruCache;       //磁盘缓存
-
     public static final String CACHE_DIR = "bitmap";
     public static final long DISK_CACHE_SIZE = 50 * 1024 * 1024; //50M
 
-    private Handler handler;
+    private LruCache<String, Bitmap> mMemoryCache;   //内存缓存
+    private DiskLruCache mDiskCache;       //磁盘缓存
+
+    private ExecutorService mExecutors;
+    private Handler handler = new Handler(Looper.getMainLooper());
 
     private volatile static MyImageLoader instance;
 
     public MyImageLoader(Context context) {
+
         long maxMemory = Runtime.getRuntime().maxMemory();
         int maxCache = (int) (maxMemory / 8) / 1024;
-        handler = new Handler(Looper.getMainLooper());
-        memoryCache = new LruCache<String, Bitmap>(maxCache) {
+
+        mMemoryCache = new LruCache<String, Bitmap>(maxCache) {
             @Override
             protected int sizeOf(String key, Bitmap value) {
                 return value.getRowBytes() * value.getHeight() / 1024;
@@ -52,11 +55,12 @@ public class MyImageLoader {
 
         String cacheDir = getBitmapCacheDir(context);
         try {
-            diskLruCache = DiskLruCache.open(new File(cacheDir), 1, 1, DISK_CACHE_SIZE);
+            mDiskCache = DiskLruCache.open(new File(cacheDir), 1, 1, DISK_CACHE_SIZE);
         } catch (IOException e) {
             e.printStackTrace();
         }
 
+        mExecutors = Executors.newFixedThreadPool(5);
     }
 
     public static MyImageLoader getInstance(Context context) {
@@ -79,9 +83,9 @@ public class MyImageLoader {
     }
 
     public Bitmap displayImageFromMemoryCache(String imgUrl, ImageView imageView) {
-        Log.d(TAG, "from memory");
-        Bitmap bitmap = memoryCache.get(imgUrl);
+        Bitmap bitmap = mMemoryCache.get(imgUrl);
         if (bitmap != null) {
+            Log.d(TAG,"from memory");
             imageView.setImageBitmap(bitmap);
         }
         return bitmap;
@@ -90,8 +94,7 @@ public class MyImageLoader {
 
     public Bitmap displayImageFromDiskCache(String imgUrl, ImageView imageView) {
         try {
-            Log.d(TAG, "from disk");
-            DiskLruCache.Snapshot snapshot = diskLruCache.get(Md5Util.generateMd5(imgUrl));
+            DiskLruCache.Snapshot snapshot = mDiskCache.get(Md5Util.generateMd5(imgUrl));
             if (snapshot != null) {
                 FileInputStream fileInputStream = (FileInputStream) snapshot.getInputStream(0);
                 FileDescriptor fd = fileInputStream.getFD();
@@ -99,10 +102,11 @@ public class MyImageLoader {
                 int reqHeight = imageView.getHeight();
                 Bitmap bitmap = ImageResizer.getInstance().decodeSampledBitmapFromFD(fd, reqWidth, reqHeight);
                 if (bitmap != null) {
-
+                    Log.d(TAG,"from disk");
                     imageView.setImageBitmap(bitmap);
+                    addBitmapToMemoryCache(imgUrl, bitmap);
                 }
-                addBitmapToMemoryCache(imgUrl, bitmap);
+                return bitmap;
             } else {
                 loadImageFromHttp(imageView, imgUrl);
             }
@@ -114,20 +118,20 @@ public class MyImageLoader {
     }
 
     public void addBitmapToMemoryCache(String key, Bitmap bitmap) {
-        if (memoryCache.get(key) == null) {
-            memoryCache.put(key, bitmap);
+        if (mMemoryCache.get(key) == null) {
+            mMemoryCache.put(key, bitmap);
         }
     }
 
 
     public void loadImageFromHttp(final ImageView imageView, final String imgUrl) {
-//        final Handler handler = new Handler(Looper.getMainLooper());
         //通过HttpUrlConnection进行图片加载,需要利用多线程
         //开启一个异步线程进行网络加载
-        Log.d(TAG, "from http");
-        AsyncTask asyncTask = new AsyncTask() {
+        //方案一：使用AsyncTask
+/*
+        AsyncTask<Object[],Integer,Bitmap> asyncTask = new AsyncTask<Object[], Integer, Bitmap>() {
             @Override
-            protected Object doInBackground(Object[] params) {
+            protected Bitmap doInBackground(Object[]... params) {
                 HttpURLConnection httpURLConnection = null;
                 OutputStream outputStream = null;
                 InputStream inputStream = null;
@@ -139,8 +143,7 @@ public class MyImageLoader {
                     httpURLConnection.connect();
 
                     if (httpURLConnection.getResponseCode() == HttpURLConnection.HTTP_OK) {
-//                        final Bitmap bitmap = BitmapFactory.decodeStream(httpURLConnection.getInputStream());
-                        DiskLruCache.Editor editor = diskLruCache.edit(Md5Util.generateMd5(imgUrl));
+                        DiskLruCache.Editor editor = mDiskCache.edit(Md5Util.generateMd5(imgUrl));
                         if (editor != null) {
                             outputStream = editor.newOutputStream(0);
                             inputStream = httpURLConnection.getInputStream();
@@ -148,41 +151,116 @@ public class MyImageLoader {
                             while ((len = inputStream.read()) != -1) {
                                 outputStream.write(len);
                             }
-                            editor.commit();
+                            editor.commit();   //不要遗忘了
                             outputStream.flush();
-                            inputStream.close();
-                            outputStream.close();
-                            handler.post(new Runnable() {
-                                @Override
-                                public void run() {
-                                    displayImageFromDiskCache(imgUrl, imageView);
-                                }
-                            });
                         }
+                    }else{
+                        Log.e(TAG,"返回码：" + httpURLConnection.getResponseCode() + "");
                     }
                 } catch (IOException e) {
                     e.printStackTrace();
                 } finally {
                     httpURLConnection.disconnect();
+                    if(inputStream != null){
+                        try {
+                            inputStream.close();  //关闭输入流
+                        }catch (IOException e){
+
+                        }
+                    }
+                    if(outputStream != null){
+                        try{
+                            outputStream.close();  //关闭输出流
+                        }catch (IOException e){
+
+                        }
+                    }
+
                 }
                 return null;
             }
+
+            @Override
+            protected void onPostExecute(Bitmap bitmap) {
+                super.onPostExecute(bitmap);
+                displayImageFromDiskCache(imgUrl, imageView);
+            }
         };
         asyncTask.execute();
-        //考虑一下AsyncTask的任务取消终止
+        //考虑一下AsyncTask的任务取消终止*/
+
+        //方案二：使用java提供的线程池，尽管AsyncTask底层就是通过线程池实现的
+        //有个问题：为什么加载出来的有些显示不出来呢?
+
+
+        mExecutors.execute(new Runnable() {
+            @Override
+            public void run() {
+                Log.d(TAG,Thread.currentThread().getId()+ "");
+                HttpURLConnection httpURLConnection = null;
+                OutputStream outputStream = null;
+                InputStream inputStream = null;
+                try {
+                    URL url = new URL(imgUrl);
+                    httpURLConnection = (HttpURLConnection) url.openConnection();
+                    httpURLConnection.setRequestMethod("GET");
+                    httpURLConnection.setConnectTimeout(5000);
+                    httpURLConnection.connect();
+
+                    if (httpURLConnection.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                        DiskLruCache.Editor editor = mDiskCache.edit(Md5Util.generateMd5(imgUrl));
+                        if (editor != null) {
+                            outputStream = editor.newOutputStream(0);
+                            inputStream = httpURLConnection.getInputStream();
+                            int len = -1;
+                            while ((len = inputStream.read()) != -1) {
+                                outputStream.write(len);
+                            }
+                            editor.commit();   //不要遗忘了
+                            outputStream.flush();
+                            Log.d(TAG,"from http");
+                            handler.post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    Log.d(TAG,"哈哈");
+                                    displayImageFromDiskCache(imgUrl,imageView);
+                                }
+                            });
+                        }
+                    }else{
+                        Log.e(TAG,"返回码：" + httpURLConnection.getResponseCode() + "");
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                } finally {
+                    httpURLConnection.disconnect();
+                    if(inputStream != null){
+                        try {
+                            inputStream.close();  //关闭输入流
+                        }catch (IOException e){
+
+                        }
+                    }
+                    if(outputStream != null){
+                        try{
+                            outputStream.close();  //关闭输出流
+                        }catch (IOException e){
+
+                        }
+                    }
+
+                }
+            }
+        });
     }
 
     public String getBitmapCacheDir(Context context) {
         String cacheRoot;
-        if (Environment.getExternalStorageState().equals(Environment.MEDIA_MOUNTED)) {
+        if (Environment.MEDIA_MOUNTED.equals(Environment.getExternalStorageState())) {
             cacheRoot = context.getExternalCacheDir().getPath();
         } else {
             cacheRoot = context.getCacheDir().getPath();
         }
-
         return cacheRoot + File.separator + CACHE_DIR + File.separator;
-
     }
-
-
 }
