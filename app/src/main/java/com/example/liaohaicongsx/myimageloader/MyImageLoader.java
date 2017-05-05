@@ -2,12 +2,11 @@ package com.example.liaohaicongsx.myimageloader;
 
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.media.Image;
 import android.os.AsyncTask;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.util.LruCache;
 import android.widget.ImageView;
 
@@ -25,21 +24,25 @@ import java.net.URL;
 /**
  * Created by liaohaicongsx on 2017/05/04.
  */
+//自定义图片加载框架
 public class MyImageLoader {
 
     public static final String TAG = "MyImageLoader";
 
-    private LruCache<String, Bitmap> memoryCache;
-    private DiskLruCache diskLruCache;
+    private LruCache<String, Bitmap> memoryCache;   //内存缓存
+    private DiskLruCache diskLruCache;       //磁盘缓存
 
     public static final String CACHE_DIR = "bitmap";
     public static final long DISK_CACHE_SIZE = 50 * 1024 * 1024; //50M
+
+    private Handler handler;
 
     private volatile static MyImageLoader instance;
 
     public MyImageLoader(Context context) {
         long maxMemory = Runtime.getRuntime().maxMemory();
         int maxCache = (int) (maxMemory / 8) / 1024;
+        handler = new Handler(Looper.getMainLooper());
         memoryCache = new LruCache<String, Bitmap>(maxCache) {
             @Override
             protected int sizeOf(String key, Bitmap value) {
@@ -66,50 +69,62 @@ public class MyImageLoader {
     }
 
 
-    //整体流程是先在内存缓存中找，在去磁盘缓存中找，若都没有，则进行网络加载，并把网络加载的结果保存在内存和磁盘缓存中
+    // 整体流程是先在内存缓存中找，
+    // 然后再去磁盘缓存中找，
+    // 若都没有，则进行网络加载，并把网络加载的结果保存在内存和磁盘缓存中
     public void displayImage(String imgUrl, ImageView imageView) {
-        if(displayImageFromMemoryCache(imgUrl,imageView) == null){
-            displayImageFromDiskCache(imgUrl,imageView);
+        if (displayImageFromMemoryCache(imgUrl, imageView) == null) {
+            displayImageFromDiskCache(imgUrl, imageView);
         }
     }
 
-    public Bitmap displayImageFromMemoryCache(String imgUrl,ImageView imageView){
+    public Bitmap displayImageFromMemoryCache(String imgUrl, ImageView imageView) {
+        Log.d(TAG, "from memory");
         Bitmap bitmap = memoryCache.get(imgUrl);
-        imageView.setImageBitmap(bitmap);
+        if (bitmap != null) {
+            imageView.setImageBitmap(bitmap);
+        }
         return bitmap;
     }
 
 
-    public Bitmap displayImageFromDiskCache(String imgUrl,ImageView imageView){
-        try{
-            DiskLruCache.Snapshot snapshot = diskLruCache.get(imgUrl);
-            FileInputStream fileInputStream = (FileInputStream) snapshot.getInputStream(0);
-            FileDescriptor fd = fileInputStream.getFD();
-            int reqWidth = imageView.getWidth();
-            int reqHeight = imageView.getHeight();
-            Bitmap bitmap = ImageResizer.getInstance().decodeSampledBitmapFromFD(fd,reqWidth,reqHeight);
-            if(bitmap != null){
-                addBitmapToMemoryCache(imgUrl,bitmap);
-            }else{
-                loadImageFromHttp(imageView,imgUrl);
+    public Bitmap displayImageFromDiskCache(String imgUrl, ImageView imageView) {
+        try {
+            Log.d(TAG, "from disk");
+            DiskLruCache.Snapshot snapshot = diskLruCache.get(Md5Util.generateMd5(imgUrl));
+            if (snapshot != null) {
+                FileInputStream fileInputStream = (FileInputStream) snapshot.getInputStream(0);
+                FileDescriptor fd = fileInputStream.getFD();
+                int reqWidth = imageView.getWidth();
+                int reqHeight = imageView.getHeight();
+                Bitmap bitmap = ImageResizer.getInstance().decodeSampledBitmapFromFD(fd, reqWidth, reqHeight);
+                if (bitmap != null) {
+
+                    imageView.setImageBitmap(bitmap);
+                }
+                addBitmapToMemoryCache(imgUrl, bitmap);
+            } else {
+                loadImageFromHttp(imageView, imgUrl);
             }
-        }catch (IOException e){
+        } catch (IOException e) {
             e.printStackTrace();
         }
 
         return null;
     }
-    public void addBitmapToMemoryCache(String key,Bitmap bitmap){
-        if(memoryCache.get(key) == null){
-            memoryCache.put(key,bitmap);
+
+    public void addBitmapToMemoryCache(String key, Bitmap bitmap) {
+        if (memoryCache.get(key) == null) {
+            memoryCache.put(key, bitmap);
         }
     }
 
 
     public void loadImageFromHttp(final ImageView imageView, final String imgUrl) {
-        final Handler handler = new Handler(Looper.getMainLooper());
+//        final Handler handler = new Handler(Looper.getMainLooper());
         //通过HttpUrlConnection进行图片加载,需要利用多线程
         //开启一个异步线程进行网络加载
+        Log.d(TAG, "from http");
         AsyncTask asyncTask = new AsyncTask() {
             @Override
             protected Object doInBackground(Object[] params) {
@@ -125,16 +140,25 @@ public class MyImageLoader {
 
                     if (httpURLConnection.getResponseCode() == HttpURLConnection.HTTP_OK) {
 //                        final Bitmap bitmap = BitmapFactory.decodeStream(httpURLConnection.getInputStream());
-                        DiskLruCache.Editor editor = diskLruCache.edit(imgUrl);
-                        outputStream = editor.newOutputStream(0);
-                        inputStream = httpURLConnection.getInputStream();
-                        int len = -1;
-                        while((len = inputStream.read()) != -1) {
-                            outputStream.write(len);
+                        DiskLruCache.Editor editor = diskLruCache.edit(Md5Util.generateMd5(imgUrl));
+                        if (editor != null) {
+                            outputStream = editor.newOutputStream(0);
+                            inputStream = httpURLConnection.getInputStream();
+                            int len = -1;
+                            while ((len = inputStream.read()) != -1) {
+                                outputStream.write(len);
+                            }
+                            editor.commit();
+                            outputStream.flush();
+                            inputStream.close();
+                            outputStream.close();
+                            handler.post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    displayImageFromDiskCache(imgUrl, imageView);
+                                }
+                            });
                         }
-                        outputStream.flush();
-                        inputStream.close();
-                        outputStream.close();
                     }
                 } catch (IOException e) {
                     e.printStackTrace();
