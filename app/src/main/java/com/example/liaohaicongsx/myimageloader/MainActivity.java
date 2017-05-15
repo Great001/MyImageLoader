@@ -2,6 +2,8 @@ package com.example.liaohaicongsx.myimageloader;
 
 import android.os.Bundle;
 import android.support.v7.app.AppCompatActivity;
+import android.view.View;
+import android.widget.AdapterView;
 import android.widget.ListView;
 
 import java.util.ArrayList;
@@ -21,16 +23,23 @@ public class MainActivity extends AppCompatActivity {
         mLvTest = (ListView) findViewById(R.id.lv_test);
 
         imgUrls = new ArrayList<>();
-        for (int i = 0; i < 5; i++) {
-            imgUrls.add("http://i4.buimg.com/1949/529b4b774033e3e7.png");
-            imgUrls.add("http://i4.buimg.com/1949/ec8c18f5c0db7365.png");
-            imgUrls.add("http://i1.piimg.com/1949/1ddef0087f8fa148.png");
+        for (int i = 0; i < 10; i++) {
+            imgUrls.add("http://i2.muimg.com/1949/732523acc12d5e27.jpg");
+            imgUrls.add("http://i2.muimg.com/1949/170b75304ea82905.jpg");
+            imgUrls.add("http://i2.muimg.com/1949/3aff8f1b5523beb7.jpg");
+//            imgUrls.add("http://i2.muimg.com/1949/0f5cee8f7dd92b41.jpg");
+//            imgUrls.add("http://i2.muimg.com/1949/5996c150cb12db75.jpg");
         }
 
         mAdapter = new LvAdapter(this, imgUrls);
         mLvTest.setAdapter(mAdapter);
 
-
+        mLvTest.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            @Override
+            public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+                ImageFragment.newInstance(imgUrls.get(position)).show(getFragmentManager(),"enen");
+            }
+        });
     }
 
 }

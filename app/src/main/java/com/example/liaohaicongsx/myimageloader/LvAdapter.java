@@ -1,6 +1,7 @@
 package com.example.liaohaicongsx.myimageloader;
 
 import android.content.Context;
+import android.os.Handler;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -41,7 +42,7 @@ public class LvAdapter extends BaseAdapter {
     }
 
     @Override
-    public View getView(int position, View convertView, ViewGroup parent) {
+    public View getView(final int position, View convertView, ViewGroup parent) {
         MyViewHolder holder = null;
         if (convertView == null) {
             convertView = LayoutInflater.from(context).inflate(R.layout.lv_item, null);
@@ -51,7 +52,7 @@ public class LvAdapter extends BaseAdapter {
             holder = (MyViewHolder) convertView.getTag();
         }
         holder.tvNum.setText(position + "");
-        MyImageLoader.getInstance(context).displayImage(imgUrls.get(position), holder.ivImg);
+        MyImageLoader.getInstance(context.getApplicationContext()).displayImage(imgUrls.get(position),holder.ivImg);
         return convertView;
     }
 
