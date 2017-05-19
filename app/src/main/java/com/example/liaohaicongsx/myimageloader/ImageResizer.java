@@ -32,7 +32,7 @@ public class ImageResizer {
         BitmapFactory.decodeFileDescriptor(fd, null, options);
         int outWidth = options.outWidth;
         int outHeight = options.outHeight;
-        options.inSampleSize = calSampleSize(outWidth, outHeight, reqWidth, reqHeight);
+        options.inSampleSize = calSampleSize(reqWidth, reqHeight, outWidth, outHeight);
         options.inJustDecodeBounds = false;
         return BitmapFactory.decodeFileDescriptor(fd, null, options);
     }
@@ -46,7 +46,7 @@ public class ImageResizer {
         BitmapFactory.decodeResource(resources, resId, options);
         int outWidth = options.outWidth;
         int outHeight = options.outHeight;
-        options.inSampleSize = calSampleSize(outWidth, outHeight, reqWidth, reqHeight);
+        options.inSampleSize = calSampleSize(reqWidth, reqHeight, outWidth, outHeight);
         options.inJustDecodeBounds = false;
         return BitmapFactory.decodeResource(resources, resId, options);
     }
